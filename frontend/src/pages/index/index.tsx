@@ -1,5 +1,5 @@
-import { View, Text } from '@tarojs/components'
-import { useLoad } from '@tarojs/taro'
+import { View, Text, Button } from '@tarojs/components'
+import Taro, { useLoad } from '@tarojs/taro'
 import './index.scss'
 
 export default function Index () {
@@ -7,9 +7,18 @@ export default function Index () {
     console.log('Page loaded.')
   })
 
+  const navigateToProducts = () => {
+    Taro.navigateTo({
+      url: '/pages/products/index'
+    })
+  }
+
   return (
     <View className='index'>
-      <Text>Hello world!</Text>
+      <Text>淘淘团商城</Text>
+      <Button type='primary' onClick={navigateToProducts} style={{ marginTop: '20px' }}>
+        浏览商品分类
+      </Button>
     </View>
   )
 }
