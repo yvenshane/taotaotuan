@@ -1,5 +1,5 @@
 import { View, Text, Image, ScrollView } from '@tarojs/components'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, createRef } from 'react'
 import Taro, { useLoad } from '@tarojs/taro'
 import './index.scss'
 
@@ -118,8 +118,9 @@ const mockCategories: Category[] = [
 export default function Products() {
   const [activeCategory, setActiveCategory] = useState<number>(1)
   const [categoryTops, setCategoryTops] = useState<{[key: number]: number}>({})
-  const productListRef = useRef<any>(null)
-  const categoryListRef = useRef<any>(null)
+  // 使用createRef而不是useRef，因为Taro的ScrollView需要特殊处理
+  const productListRef = createRef<any>()
+  const categoryListRef = createRef<any>()
   const [scrolling, setScrolling] = useState<boolean>(false)
 
   useLoad(() => {
@@ -129,21 +130,21 @@ export default function Products() {
   // 初始化每个分类的顶部位置
   useEffect(() => {
     const query = Taro.createSelectorQuery()
-    
+
     mockCategories.forEach(category => {
       query.select(`#category-${category.id}`).boundingClientRect()
     })
-    
+
     query.exec((res) => {
       if (!res || !res.length) return
-      
+
       const tops: {[key: number]: number} = {}
       res.forEach((item, index) => {
         if (item) {
           tops[mockCategories[index].id] = item.top
         }
       })
-      
+
       setCategoryTops(tops)
     })
   }, [])
@@ -152,28 +153,61 @@ export default function Products() {
   const handleCategoryClick = (categoryId: number) => {
     setActiveCategory(categoryId)
     setScrolling(true)
-    
+
+    // 获取所有分类元素的位置信息
     Taro.createSelectorQuery()
-      .select(`#category-${categoryId}`)
+      .selectAll('.category-section')
       .boundingClientRect()
       .select('#product-list')
       .scrollOffset()
       .exec((res) => {
-        if (res && res[0] && res[1] && productListRef.current) {
-          const categoryTop = res[0].top
-          const scrollTop = res[1].scrollTop
-          const targetScrollTop = scrollTop + categoryTop - 10 // 减去一点偏移量，使标题完全可见
-          
-          productListRef.current.scrollTo({
-            top: targetScrollTop,
-            behavior: 'smooth'
-          })
-          
-          // 滚动完成后重置scrolling状态
-          setTimeout(() => {
-            setScrolling(false)
-          }, 300)
+        if (!res || !res[0] || !res[1]) {
+          setScrolling(false)
+          return
         }
+
+        const sections = res[0]
+        const scrollOffset = res[1].scrollTop
+
+        // 找到目标分类的索引
+        const index = mockCategories.findIndex(c => c.id === categoryId)
+        if (index === -1 || !sections[index]) {
+          setScrolling(false)
+          return
+        }
+
+        // 获取目标分类元素的位置
+        const targetSection = sections[index]
+        const targetTop = targetSection.top + scrollOffset - 10 // 减去一点偏移量，使标题完全可见
+
+        // 使用Taro的方式滚动到对应元素
+        Taro.createSelectorQuery()
+          .select('#product-list')
+          .node()
+          .exec((nodeRes) => {
+            const scrollView = nodeRes[0]?.node
+            if (scrollView && scrollView.scrollTo) {
+              // 直接滚动到目标分类的精确位置
+              scrollView.scrollTo({ top: targetTop, animated: true })
+            } else {
+              // 如果无法直接操作节点，尝试使用pageScrollTo
+              try {
+                // 使用选择器滚动到对应元素
+                Taro.pageScrollTo({
+                  selector: `#category-${categoryId}`,
+                  duration: 300,
+                  offsetTop: 0
+                })
+              } catch (err) {
+                console.error('Failed to scroll product list:', err)
+              }
+            }
+
+            // 滚动完成后重置scrolling状态
+            setTimeout(() => {
+              setScrolling(false)
+            }, 300)
+          })
       })
   }
 
@@ -182,39 +216,72 @@ export default function Products() {
     if (scrolling) return // 如果是通过点击分类触发的滚动，不处理
 
     const scrollTop = e.detail.scrollTop
-    
+    const scrollHeight = e.detail.scrollHeight
+    const clientHeight = e.target.clientHeight
+
+    // 检查是否滚动到底部
+    const isBottom = scrollTop + clientHeight >= scrollHeight - 20 // 接近底部的阈值
+
     // 找出当前滚动位置对应的分类
     let currentCategory = mockCategories[0].id
-    
+
     Taro.createSelectorQuery()
       .selectAll('.category-section')
       .boundingClientRect()
       .exec((res) => {
         if (!res || !res[0]) return
-        
+
         const sections = res[0]
-        
-        for (let i = 0; i < sections.length; i++) {
-          const section = sections[i]
-          if (section.top <= 100) { // 100是一个阈值，可以根据实际情况调整
-            currentCategory = mockCategories[i].id
-          } else {
-            break
+
+        // 如果滚动到底部，直接选择最后一个分类
+        if (isBottom) {
+          currentCategory = mockCategories[mockCategories.length - 1].id
+        } else {
+          // 否则根据可见区域确定当前分类
+          for (let i = 0; i < sections.length; i++) {
+            const section = sections[i]
+            if (section.top <= 100) { // 100是一个阈值，可以根据实际情况调整
+              currentCategory = mockCategories[i].id
+            } else {
+              break
+            }
           }
         }
-        
+
         if (currentCategory !== activeCategory) {
           setActiveCategory(currentCategory)
-          
+
           // 左侧列表滚动到当前分类
-          if (categoryListRef.current) {
-            const index = mockCategories.findIndex(c => c.id === currentCategory)
-            if (index > -1) {
-              categoryListRef.current.scrollTo({
-                top: index * 60, // 假设每个分类项高度为60px
-                behavior: 'smooth'
+          const index = mockCategories.findIndex(c => c.id === currentCategory)
+          if (index > -1) {
+            // 使用更简单的方式滚动到对应分类
+            // 计算每个分类项的高度（假设每个分类项高度相同）
+            const itemHeight = 60 // 根据实际CSS调整这个值
+            const targetScrollTop = index * itemHeight
+
+            // 使用Taro的方式滚动
+            Taro.createSelectorQuery()
+              .select('.category-list')
+              .node()
+              .exec((res) => {
+                const scrollView = res[0]?.node
+                if (scrollView && scrollView.scrollTo) {
+                  scrollView.scrollTo({ top: targetScrollTop, animated: true })
+                } else {
+                  // 如果无法直接操作节点，尝试使用pageScrollTo
+                  try {
+                    // 注意：这个方法可能在H5环境下不能正确滚动到分类列表
+                    // 因为它通常滚动整个页面而不是特定元素
+                    Taro.pageScrollTo({
+                      scrollTop: targetScrollTop,
+                      duration: 300,
+                      selector: '.category-list'
+                    })
+                  } catch (err) {
+                    console.error('Failed to scroll category list:', err)
+                  }
+                }
               })
-            }
           }
         }
       })
